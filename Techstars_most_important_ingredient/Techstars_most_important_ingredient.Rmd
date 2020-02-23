@@ -97,7 +97,7 @@ ggplot(companies, aes(x= Number.of.Founders, y = log10(Total.Funding.Amount.Curr
   geom_smooth(method = "lm", color = "black", lwd = 0.8) +
   facet_wrap(.~as.factor(Founded.Year),nrow = 2) +
   ggtitle("Greater Seattle Area Startups 2010-2019 (companies with no funding removed)") +
-  xlab("Number of Founders") +
+  xlab("Number of Founders in Each Team, by Founded Year") +
   ylab("Log 10 of Total Funding to Date in USD") +
   theme(plot.title = element_text(size = 10, face = "bold"), axis.title = element_text(size = 8), axis.text = element_text(size = 7.5))
 
@@ -110,7 +110,7 @@ ggplot(median_funding1, aes(x= Categroy.Number.of.Founders, y = Total.Funding.Am
     coord_flip() +
     ggtitle("Greater Seattle Area Startups 2010-2019") +
     xlab("Number of Founders Category") +
-    ylab("Median Total Funding to Date in USD") +
+    ylab("Median Total Funding to Date in USD, by Founded Year") +
     theme(plot.title = element_text(size = 10, face = "bold"), axis.title = element_text(size = 8), axis.text = element_text(size = 7.5))
 
 ggsave("seattle_startups_medianfunding_numoffounders.jpg")
@@ -154,7 +154,7 @@ ggplot(founder_company_experience, aes(x= Team.Avg.Num.Founded.Organizations, y 
   geom_smooth(method = "lm", color = "black", lwd = 0.8) +
   facet_wrap(.~as.factor(Founded.Year),nrow = 2) +
   ggtitle("Greater Seattle Area Startups 2010-2019 (companies with no funding removed)") +
-  xlab("Average Number of Companies Previsouly Founded per Team") +
+  xlab("Average Number of Companies Previsouly Founded per Team, by Founded Year") +
   ylab("Log 10 of Total Funding to Date in USD") +
   xlim(0, 3) +
   theme(plot.title = element_text(size = 10, face = "bold"), axis.title = element_text(size = 8), axis.text = element_text(size = 7.5))
@@ -178,7 +178,7 @@ ggplot(founder_company_gender) +
   geom_density(aes(x= Gender.Balance.Index),color = "black") +
   facet_wrap(.~as.factor(Founded.Year),nrow = 2) +
   ggtitle("Greater Seattle Area Startups 2010-2019 (companies with no funding removed)") +
-  xlab("Founding Team Gender Balance Index (Number of Male Founders - Number of Female Founders)") +
+  xlab("Founding Team Gender Balance Index (Number of Male Founders - Number of Female Founders), by Founded Year") +
   ylab("Log 10 of Total Funding to Date in USD") +
   theme(plot.title = element_text(size = 10, face = "bold"), axis.title = element_text(size = 8), axis.text = element_text(size = 7.5))
 
