@@ -1,5 +1,5 @@
 ---
-title: "Why does Techstars think this ingredient is the most important one in startups?"
+title: "Why does Techstars think this ingredient is the most important one in a startup?"
 author: "Ran Du"
 date: "21/02/2020"
 output:
