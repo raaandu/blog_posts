@@ -1,0 +1,705 @@
+---
+title: "Airbnb Report"
+author: "Ran Du"
+date: "05/03/2020"
+output:
+  html_document: default
+  word_document: default
+  pdf_document: default
+df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+\
+\
+
+## a.   Objectives: Description of the business problem and the goals of the project.
+
+This is a tool that Airbnb has put together to help new hosts in Seattle better price their listing and help existing hosts have a better understanding of what it takes to become a super host.
+
+The business problem they are aiming to solve are: 
+1) How should a new airbnb host price their property to be competitive? -> CART & XGBoost
+2) What it takes to be a super host? -> Logit 
+
+\
+## b.   Dataset: Describe the data in detail – how you sourced it, when was it collected, how large is it, and the reason why the data can help answer your problem.
+
+Data source: http://insideairbnb.com/get-the-data.html
+Date Collection Date: Feb 22 2020
+Datasize:
+listings.csv.gz - 8 MB
+listings.csv - 1.2 MB
+The reason why the data can help answer our problem is because that it has a large amount of data on currently available listings on Airbnb in Seattle, including basic information of their properties, data regarding their reviews and super host status, and other necessary data points to solve these problems.
+
+
+## c.    Exploratory Data Analysis: Start by describing (and showing) the data, show summary stats, present descriptive analysis and discuss any interesting findings in this section.
+
+### Step 1 - Read datasets
+
+```{r results="hide", message = FALSE, warning = FALSE}
+# Install necessary packages
+#install.packages("data.table")
+#install.packages("utils")
+#install.packages("bit64")
+#install.packages("pysch")
+#install.packages("ggplot2")
+#install.packages("forcats")
+#install.packages("dplyr")
+#install.packages("rpart")
+#install.packages("rpart.plot")
+#install.packages("pROC")
+#install.packages("xgboost")
+#install.packages("gains")
+#install.packages("ModelMetrics")
+#install.packages("ROCR")
+#install.packages("lubridate")
+#install.packages("fastDummies")
+
+# Read data
+## Load necessary packages
+library(data.table)
+library(utils)
+library(bit64)
+
+## Detailed Listings data for Seattle
+listings <- fread('listings.csv.gz',sep = ',', header = TRUE)
+
+## Summary information and metrics for listings in Seattle 
+listings_sum <- fread('listings.csv',sep = ',', header = TRUE)
+```
+
+### Step 2 - Exploratory Data Analysis
+
+#### 1) Dimension of the datasets
+
+```{r}
+dim(listings)
+dim(listings_sum)
+```
+
+We can see that the there are 7544 listings in Seattle on Airbnb as of Feb 22 2020. The detailed listing table has over 100 columns, and the summary table has 16 columns.
+
+#### 2) Take a look at first 5 columns and rows of listings
+
+```{r}
+head(listings[,1:5], 5)
+```
+
+#### 3) Take a look at first 5 columns and rows of listings_sum
+
+```{r}
+head(listings_sum[, 1:5], 5)
+```
+
+#### 4) Names of columns in listings.
+
+```{r results="hide", message = FALSE, warning = FALSE}
+names(listings)
+```
+
+Results are hidden in this report because there are over 100 columns.
+
+#### 5) Names of columns in listings_sum.
+
+```{r}
+names(listings_sum)
+```
+
+#### 6) Merge based on listing id with metric columns that might be relevant to our models, omitting info columns such as profile picture url.
+
+```{r merge}
+
+listings_merged <- merge(x = listings_sum, y = listings[ , c("id","amenities","accommodates", "bathrooms", "bedrooms", "beds", "bed_type", "cancellation_policy", "first_review", "host_since", "host_response_time","host_response_rate", "host_acceptance_rate","host_is_superhost", "host_has_profile_pic", "host_identity_verified", "instant_bookable", "is_business_travel_ready", "is_location_exact", "property_type", "review_scores_rating", "review_scores_accuracy", "review_scores_cleanliness", "review_scores_checkin", "review_scores_communication","review_scores_location","review_scores_value", "require_guest_profile_picture", "require_guest_phone_verification")], by = "id", all.x=TRUE)
+
+# convert data type
+listings_merged$neighbourhood_group <- as.factor(listings_merged$neighbourhood_group)
+listings_merged$neighbourhood <- as.factor(listings_merged$neighbourhood)
+listings_merged$room_type <- factor(listings_merged$room_type, levels = c("Entire home/apt", "Private room", "Shared room", "Hotel room"))
+listings_merged$first_review <- as.Date(listings_merged$first_review)
+listings_merged$last_review <- as.Date(listings_merged$last_review)
+listings_merged$bed_type <- as.factor(listings_merged$bed_type)
+
+listings_merged$cancellation_policy_strictness <- ifelse(listings_merged$cancellation_policy == "flexible", 1, ifelse(listings_merged$cancellation_policy == "moderate", 2, ifelse(listings_merged$cancellation_policy == "strict" | listings_merged$cancellation_policy == "strict_14_with_grace_period", 3, ifelse(listings_merged$cancellation_policy == "super_strict_30", 4, 5
+)) ))
+
+listings_merged$host_since <- as.Date(listings_merged$host_since)
+
+listings_merged$host_response_speed <- ifelse(listings_merged$host_response_time == "within an hour", 3, ifelse(listings_merged$host_response_time == "within a few hours", 2, 1))
+
+listings_merged$host_response_time <- as.factor(ifelse(listings_merged$host_response_time == "within an hour", "within_an_hour", ifelse(listings_merged$host_response_time == "within a few hours", "within_a_few_hours", "longer_than_a_few_hours")))
+listings_merged$host_response_rate<- as.numeric(gsub("%", "", listings_merged$host_response_rate))
+listings_merged$host_acceptance_rate<- as.numeric(gsub("%", "", listings_merged$host_acceptance_rate))
+listings_merged$host_is_superhost <- ifelse(listings_merged$host_is_superhost == "t", 1, 0)
+listings_merged$host_has_profile_pic <- ifelse(listings_merged$host_has_profile_pic == "t", 1, 0)
+listings_merged$host_identity_verified <- ifelse(listings_merged$host_identity_verified == "t", 1, 0)
+listings_merged$instant_bookable <- ifelse(listings_merged$instant_bookable == "t", 1, 0)
+listings_merged$is_location_exact <- ifelse(listings_merged$is_location_exact == "t", 1, 0)
+listings_merged$is_business_travel_ready <- ifelse(listings_merged$is_business_travel_ready == "t", 1, 0)
+listings_merged$property_type <- as.factor(listings_merged$property_type)
+listings_merged$require_guest_profile_picture <- ifelse(listings_merged$require_guest_profile_picture == "t", 1, 0)
+listings_merged$require_guest_phone_verification <- ifelse(listings_merged$require_guest_phone_verification == "t", 1, 0)
+```
+
+#### 7) What neighborhood groups are these Airbnb's in?
+
+```{r}
+library(ggplot2)
+library(forcats)
+
+ggplot(listings_merged) + 
+    geom_bar(aes(x = fct_rev(fct_infreq(neighbourhood_group)), fill = room_type )) +
+    ggtitle("Number of Airbnb's per Neighbourhood Group in Seattle") +
+    xlab("Neighbourhood Group") +
+    ylab("Count") +
+    guides(fill=guide_legend(title="Room Type")) +
+    coord_flip()
+```
+A few observations:
+
+1) It's surprising that there are some hotel rooms in airbnb listings. Since hotel might have their own pricing models, we should consider removing them when we build a pricing model for new Airbnb hosts.
+
+2) With Other neighbourhoods being the top category, we know that there might be a lot of neighbourhoods grouped in that area. This category would not be able to help us provide a good pricing model, because the varianbility within this group could be very high. 
+
+3) When diggin deeper in the neighbourhood categorization dataset, we found out some of the neighbourhood groups do not make a lot of sense. For example, two gentrified neighborhoods Wallingford and Fremont are grouped together into Other Neighborhoods with all the other smaller/less popular areas. We will clean up the neighbourhood group based on our own knowledge of Seattle.
+
+``` {r}
+listings_merged$neighbourhood_group <- gsub("Delridge", "West Seattle",listings_merged$neighbourhood_group)
+listings_merged$neighbourhood_group <- ifelse(listings_merged$neighbourhood == "Eastlake", "Eastlake", listings_merged$neighbourhood_group)
+listings_merged$neighbourhood_group <- ifelse(listings_merged$neighbourhood == "South Lake Union", "South Lake Union", listings_merged$neighbourhood_group)
+listings_merged$neighbourhood_group <- ifelse(listings_merged$neighbourhood == "Westlake Union", "Westlake", listings_merged$neighbourhood_group)
+listings_merged$neighbourhood_group <- ifelse(listings_merged$neighbourhood == "Green Lake", "Green Lake", listings_merged$neighbourhood_group)
+listings_merged$neighbourhood_group <- ifelse(listings_merged$neighbourhood == "Greenwood", "Greenwood", listings_merged$neighbourhood_group)
+listings_merged$neighbourhood_group <- ifelse(listings_merged$neighbourhood == "Wallingford", "Wallingford", listings_merged$neighbourhood_group)
+listings_merged$neighbourhood_group <- ifelse(listings_merged$neighbourhood == "Fremont", "Fremont", listings_merged$neighbourhood_group)
+
+# Check if the new neighbourhood group makes sense
+ggplot(listings_merged) + 
+    geom_bar(aes(x = fct_rev(fct_infreq(neighbourhood_group)), fill = room_type )) +
+    ggtitle("Number of Airbnb's per Neighbourhood Group in Seattle") +
+    xlab("Neighbourhood Group") +
+    ylab("Count") +
+    guides(fill=guide_legend(title="Room Type")) +
+    coord_flip()
+
+```
+
+It makes sense now Downtown has the most Airbnb's listing since usually downtown has the most leisure and business travellers.
+
+However, these group might be too granular for our pricing model. We will create a new predictor called neighborhood_region where we group neighbourhood groups that are close to each other geographically.
+
+``` {r}
+
+listings_merged$neighbourhood_region <- ifelse(listings_merged$neighbourhood %in% c("Broadway", "Madison Park", "Montlake", "Portage Bay", "Stevens", "Eastlake", "South Lake Union" , "Westlake" , "Atlantic", "Harrison/Denny-Blaine", "Leschi", "Madrona", "Mann", "Minor"), "Central Seattle",
+                                                     ifelse(listings_merged$neighbourhood %in% c("Belltown", "Central Business District", "First Hill", "International District", "Pike-Market", "Pioneer Square", "Yesler Terrace"), "Downtown",
+                                                            ifelse(listings_merged$neighbourhood %in% c("Interbay", "Briarcliff", "Lawton Park", "Southeast Magnolia", "East Queen Anne", "Lower Queen Anne" , "North Queen Anne" , "West Queen Anne"), "Greater Queen Anne",
+                                                                   ifelse(listings_merged$neighbourhood %in% c("Haller Lake" ,"Maple Leaf" , "North College Park" , "Pinehurst" , "Fremont" , "Green Lake" ,"Greenwood" , "Phinney Ridge" , "Wallingford" , "University District"), "North Central Seattle",
+                                                                                                               ifelse(listings_merged$neighbourhood %in% c("Cedar Park" , "Matthews Beach" , "Meadowbrook" , "Olympic Hills" , "Victory Heights" , "Bryant" , "Laurelhurst" , "North Beach/Blue Ridge" , "Ravenna" , "Roosevelt" , "Sand Point" , "View Ridge" , "Wedgwood" , "Windermere"), "Northeast Seattle",
+                                                                                                                      ifelse(listings_merged$neighbourhood %in% c("Adams" , "Loyal Heights" , "Sunset Hill" , "West Woodland" , "Whittier Heights" , "Bitter Lake" , "Broadview" , "Crown Hill"), "Northwest Seattle", 
+                                                                                                                             ifelse(listings_merged$neighbourhood %in% c("Holly Park" , "Mid-Beacon Hill" , "North Beacon Hill" , "South Beacon Hill" , "Georgetown" , "Harbor Island" , "Industrial District" , "South Park" , "Brighton" , "Columbia City" , "Dunlap" , "Mount Baker" , "Rainier Beach" , "Rainier View" , "Seward Park"), "South Seattle", 
+                                                                                                                                    ifelse(listings_merged$neighbourhood %in% c("Highland Park" , "High Point" , "North Delridge" , "Riverview" , "Roxhill" , "South Delridge" , "Alki" , "Arbor Heights" , "Fairmount Park", "Fauntleroy" , "Gatewood" , "Genesee" , "North Admiral" , "Seaview"), "West Seattle",0))))))))
+
+listings_merged$neighbourhood_region <- as.factor(listings_merged$neighbourhood_region)
+
+# Check if the region makes sense
+ggplot(listings_merged) + 
+    geom_bar(aes(x = fct_rev(fct_infreq(neighbourhood_region)), fill = neighbourhood_region)) +
+    ggtitle("Number of Airbnb per Neighbourhood Region in Seattle") +
+    xlab("Neighbourhood Region") +
+    ylab("Count") +
+    guides(fill=guide_legend(title="Neighbourhood region")) +
+    coord_flip()
+```
+
+#### 8) What types of properties are there?
+
+```{r}
+ggplot(listings_merged) + 
+    geom_bar(aes(x = fct_rev(fct_infreq(property_type)), fill = room_type )) +
+    ggtitle("Airbnb Property and Room Type in Seattle") +
+    xlab("Property Type") +
+    ylab("Count") +
+    guides(fill=guide_legend(title="Room Type")) +
+    coord_flip()
+```
+
+We notice that property type is highly skewed, we will consolidate the categories that are not the top 5 categories into Other.
+
+```{r}
+listings_merged$property_type <- factor(ifelse(as.character(listings_merged$property_type) %in% c("House", "Apartment", "Guest suite", "Townhouse", "Condomenium"), as.character(listings_merged$property_type), "Other"), levels = c("Other","House","Apartment","Guest suite", "Townhouse", "Condomenium"))
+
+ggplot(listings_merged) + 
+    geom_bar(aes(x = fct_rev(fct_infreq(property_type)), fill = room_type )) +
+    ggtitle("Airbnb Property and Room Type in Seattle") +
+    xlab("Property Type") +
+    ylab("Count") +
+    guides(fill=guide_legend(title="Room Type")) +
+    coord_flip()
+```
+
+#### 9) How many guests do these Airbnb's accomodate? How many bedrooms and bathrooms do they have?
+
+```{r}
+library(psych)
+describe(listings_merged$accommodates)
+describe(listings_merged$bedrooms)
+describe(listings_merged$bathrooms)
+```
+
+#### 10) What amenities do these Airbnb's usually have?
+
+```{r}
+# Creat dummy variable for the amenities
+listings_merged$amenities_tv <- ifelse(grepl("TV",listings_merged$amenities), 1,0)
+listings_merged$amenities_ac <- ifelse(grepl("Air conditioning",listings_merged$amenities), 1,0)
+listings_merged$amenities_heating <- ifelse(grepl("Heating",listings_merged$amenities), 1,0)
+listings_merged$amenities_wifi <- ifelse(grepl("Wifi",listings_merged$amenities), 1,0)
+listings_merged$amenities_kitchen <- ifelse(grepl("Kitchen",listings_merged$amenities), 1,0)
+listings_merged$amenities_freeparking <- ifelse(grepl("Free parking",listings_merged$amenities), 1,0)
+listings_merged$amenities_petsallowed <- ifelse(grepl("Pets allowed",listings_merged$amenities), 1,0)
+
+# Getting percentages of listings with corresponding ameninities
+mean(listings_merged$amenities_tv)
+mean(listings_merged$amenities_ac)
+mean(listings_merged$amenities_heating)
+mean(listings_merged$amenities_wifi)
+mean(listings_merged$amenities_kitchen)
+mean(listings_merged$amenities_freeparking)
+mean(listings_merged$amenities_petsallowed)
+```
+
+Almost every listing has heating and wifi, which is not surprising. These two variables are probably not differentiators.
+
+TV, Kitchen, Air conditioning, Pets allowed are able to differentiate the listings since not all properties have them.
+
+#### 11) What is the price range for Airbnb's in Seattle?
+
+```{r}
+summary(listings_merged$price)
+```
+
+Looks like there are some outlisers when extremely high pricing. We should remove them to prevent them from skewing our analysis.
+
+```{r}
+listings_merged <- subset(listings_merged, price <= 500)
+ggplot(listings_merged) +
+    geom_histogram(aes(x = price, fill = room_type), binwidth = 10) +
+    ggtitle("Price Distribution of Airbnb Listings in Seattle (Price <= $500)") +
+    xlab("Price") +
+    ylab("Count") +
+    guides(fill=guide_legend(title="Room Type"))
+```
+
+
+#### 12) What is the average review scores (out of 100)?
+
+```{r}
+describe(listings_merged$review_scores_rating)
+```
+```{r}
+ggplot(listings_merged) +
+    geom_histogram(aes(x = review_scores_rating, fill = room_type), binwidth = 1) +
+    ggtitle("Rating Distribution of Airbnb Listings in Seattle") +
+    xlab("Rating") +
+    ylab("Count") +
+    guides(fill=guide_legend(title="Room Type"))
+```
+
+#### 13) What percentages of hosts are super hosts? 
+
+```{r}
+# Note that a host could have multiple listings, so we would need to aggregate by host_id.
+superhost_agg <- aggregate(listings_merged$host_is_superhost, by = list(listings_merged$host_id), FUN = mean)
+mean(superhost_agg$x)
+```
+
+#### 14) What percentages of hosts have their identity verified?
+```{r}
+hostidentity_agg <- aggregate(listings_merged$host_identity_verified, by = list(listings_merged$host_id), FUN = mean)
+mean(hostidentity_agg$x)
+```
+
+#### 15) What percentages of hosts have a profile picture?
+
+```{r}
+hostpic_agg <- aggregate(listings_merged$host_has_profile_pic, by = list(listings_merged$host_id), FUN = mean)
+mean(hostpic_agg$x)
+```
+This is not a differentiator.
+
+#### 16) What percentages of Airbnb is instant_bookable?
+
+```{r}
+mean(listings_merged$instant_bookable)
+```
+
+#### 17) What kind of cancellation policy do these listings have?
+
+```{r}
+summary(as.factor(listings_merged$cancellation_policy))
+```
+
+#### 18) What percentages of Airbnb requires guests have profile picture or has their phone verified?
+
+```{r}
+mean(listings_merged$require_guest_profile_picture)
+mean(listings_merged$require_guest_phone_verification)
+```
+
+These two criteria is not a differentiator.
+
+#### 19) What percentages of Airbnb is business travel ready?
+
+```{r}
+mean(listings_merged$is_business_travel_ready)
+```
+
+This is not a differentiator.
+
+#### 20) How experienced are hosts in Seattle?
+```{r}
+library(lubridate)
+listings_merged$months_as_host <- interval(ymd(listings_merged$host_since),ymd("2020-02-22")) %/% months(1)
+# There are many hosts with multiple listings
+hostexp_agg <- aggregate(listings_merged$months_as_host, by = list(listings_merged$host_id), FUN = mean)
+ggplot(hostexp_agg) + 
+    geom_histogram(aes(x = x), fill = "#F8766D", binwidth = 12) +
+    ggtitle("Seattle Airbnb Host Experience Distribution (as of 02/22/2020)") +
+    xlab("Months of Experience as a Host")
+```
+
+#### 19) What type of beds do these listings have?
+
+```{r}
+summary(listings_merged$bed_type)
+```
+
+This is not a differentiator because vast majority of listings have real bed.
+
+
+Most of hosts in Seattle have an average of 50 months experience, which is around 4-5 years.
+
+\
+## d. In-depth analysis: This is the core part of your report. Present the detailed model, the analysis, the robustness checks, and your results. Discuss the findings from each model. Remember to first specify the model (in equations) and add a brief description of the model instead of simply showing the R code and results. This is especially important if you present a new model that was not discussed in class. 
+
+### Subset training and validation data before analysis
+
+``` {r results="hide", message = FALSE, warning = FALSE}
+
+# we will remove the hotel rooms from our dataset
+listings_merged <- subset(listings_merged, room_type != "Hotel room")
+
+# we will split the data into 75% training, 25% testing 
+library(dplyr)
+set.seed(888)
+sample <- sample.int(n = nrow(listings_merged), size = floor(.75*nrow(listings_merged)), replace = F)
+listings_train <- listings_merged[sample, ]
+listings_val  <- listings_merged[-sample, ]
+```
+
+### Select predictors for modeling in problem 1
+
+We will predict pricing using the following predictors on the properties:
+1) neighborhood region
+2) property type
+3) room type
+4) How many people it accommodates
+5) number of bedrooms
+6) number of bathrooms
+7) whether it has  tv
+8) whether it has air conditioning
+9) whether it has kitchen
+10) whether it allows pets
+11) whether it has free parking on premise
+12) if their listing is instant bookable
+13) whether they have their identity verified
+14) what type of cancellation policy they have
+15) minimum nights requirement
+16) number_of_reviews (new host will have 0 by default)
+17) how many months they has been a host (new host will have 0 by default)
+18) whether it is super host (new host will not be a superhost by default)
+
+``` {r}
+model1 <- price ~ neighbourhood_region + property_type + room_type +  accommodates + bedrooms + bathrooms + amenities_tv + amenities_ac + amenities_kitchen + amenities_petsallowed + amenities_freeparking + instant_bookable + host_identity_verified + cancellation_policy_strictness + minimum_nights +  number_of_reviews + months_as_host + host_is_superhost 
+
+```
+
+### Business problem 1 - how should a airbnb host price thieir property to stay competitive?
+
+#### First model - Regression Tree 
+``` {r}
+# Build the model1
+# Set cp = 0.01
+library(rpart)
+library(rpart.plot)
+tree <- rpart(formula = model1, data = listings_train, control = rpart.control(cp = 0.005))
+
+jpeg("rplot_tree.jpg", width = 2000, height = 1000)
+rpart.plot(tree)
+dev.off()
+
+rpart.plot(tree)
+```
+
+Since our tree is quite shallow, it will provide low variance but high variance. In order to counter that, boosted tree model would work better.
+
+#### Second model - XGBoost
+
+```{r}
+# find out the column number for the predictors
+which(colnames(listings_train) == "neighbourhood_region")
+which(colnames(listings_train) == "property_type")
+which(colnames(listings_train) == "room_type")
+which(colnames(listings_train) == "accommodates")
+which(colnames(listings_train) == "bedrooms")
+which(colnames(listings_train) == "bathrooms")
+which(colnames(listings_train) == "amenities_ac")
+which(colnames(listings_train) == "amenities_tv")
+which(colnames(listings_train) == "amenities_kitchen")
+which(colnames(listings_train) == "amenities_petsallowed")
+which(colnames(listings_train) == "amenities_freeparking")
+which(colnames(listings_train) == "instant_bookable")
+which(colnames(listings_train) == "host_identity_verified")
+which(colnames(listings_train) == "cancellation_policy_strictness")
+which(colnames(listings_train) == "number_of_reviews")
+which(colnames(listings_train) == "months_as_host")
+which(colnames(listings_train) == "host_is_superhost")
+which(colnames(listings_train) == "minimum_nights")
+col = c(47, 35, 9, 18, 20, 19, 49, 48, 52, 54, 53, 32, 31, 45, 12, 55, 29, 11)
+
+library(xgboost)
+xgboost <- xgboost(data = data.matrix(listings_train[,..col]), 
+                  label = listings_train$price,
+                  eta = 0.1,
+                  max_depth = 8,
+                  nrounds = 50, 
+                  subsample = 0.75,
+                  colsample_bytree = 1,
+                  min_child_weight = 10,
+                  gamma = 1,
+                  nthread = 55,
+                  eval_metric = "rmse",
+                  objective = "reg:squarederror",
+                  verbose = 0
+                  )
+
+xgb.plot.tree(model = xgboost, trees = 3, show_node_id = TRUE)
+```
+
+#### Cross validation predictions
+
+``` {r results="hide", message = FALSE, warning = FALSE}
+# Predict using training set
+listings_train$price_pred1 <- predict(tree, newdata = listings_train)
+listings_train$price_pred2 <- predict(xgboost, newdata = data.matrix(listings_train[,..col]))
+
+# Predict using testing set
+listings_val$price_pred1 <- predict(tree, newdata = listings_val)
+listings_val$price_pred2 <- predict(xgboost, newdata = data.matrix(listings_val[,..col]))
+
+# Compare model performance using RMSE since these are regression tree model
+library(ModelMetrics)
+
+# CART train vs test
+rmse(listings_train$price_pred1, listings_train$price)
+rmse(listings_val$price_pred1, listings_val$price)
+#XGboost train vs test
+rmse(listings_train$price_pred2, listings_train$price)
+rmse(listings_val$price_pred2, listings_val$price)
+
+# Tuning the trees based on the RMSE
+
+```
+
+### Business problem 2 - What it takes to be a super host?
+
+
+#### Building the logit model using trainig dataset
+
+Here we will select all the predictors that hosts can have an impact on, such as how how much they price their listings, what type of room they offer, how fast they respond, if they make their listing instant bookable. The idea is to let hosts know what type of changes they might have to do to increase their likelihood to be a superhost. Some of the changes can happen immediately, such as how fast they respond inquiries on Airbnb; some might have to happen in the long run, such as increase the number of people you accommodate (such as listing a bigger property)
+
+```{r}
+# convert factor variables property_type, room_type, cancellation_policy, host_response_time into dummy variables so we can calculate importance later
+
+library(dplyr)
+listings_logit <- listings_merged %>% select(host_is_superhost, price, minimum_nights, number_of_reviews, reviews_per_month,  calculated_host_listings_count, availability_365, accommodates, bathrooms, bedrooms, beds,  host_response_rate, host_acceptance_rate, host_identity_verified, instant_bookable, is_location_exact,  review_scores_rating, review_scores_accuracy, review_scores_cleanliness, review_scores_checkin,  review_scores_communication, review_scores_location, review_scores_value, amenities_ac, amenities_kitchen, amenities_freeparking, amenities_petsallowed, months_as_host, cancellation_policy_strictness, host_response_speed, minimum_nights, property_type, room_type)
+
+library(fastDummies)
+listings_logit_wide <- dummy_cols(listings_logit)
+listings_logit_wide <- listings_logit_wide[,c(1:30,33:42)]
+names(listings_logit_wide)[34] <- "property_type_Guest_suite"
+names(listings_logit_wide)[37] <- "room_type_Entire_home_apt"
+names(listings_logit_wide)[38] <- "room_type_Private_room"
+names(listings_logit_wide)[39] <- "room_type_Shared_room"
+names(listings_logit_wide)[40] <- "room_type_Hotel_room"
+
+```
+
+We can see from the data that there are quite some NA data and they usually have 0 reviews, or do not have any host response or acceptance data. These are most likely to be brand new listings. The business problem we are solving is to determine how to become a super host. New hosts are probably not going to be super host right away. Therefore, we can exclude them from our analysis.
+
+``` {r}
+listings_logit_wide <- na.omit(listings_logit_wide)
+```
+
+```{r}
+# create training and validation sample for logit model
+set.seed(111)
+sample <- sample.int(n = nrow(listings_logit_wide), size = floor(.75*nrow(listings_logit_wide)), replace = F)
+listings_logit_train <- listings_logit_wide[sample, c(1:30,32:35,37:38)]
+listings_logit_val  <- listings_logit_wide[-sample, c(1:30,32:35,37:38)]
+
+logit1 <-  glm(host_is_superhost ~., data = listings_logit_train, family = binomial(link = "logit"))
+summary(logit1)
+```
+
+#### Make predictions using testing dataset
+``` {r}
+# Predict using testing set
+listings_logit_val$superhost_pred1 <- predict(logit1, newdata = listings_logit_val, type ="response")
+```
+
+#### Calculate testing accuracy on testing dataset based on threhold = 0.5
+``` {r}
+table_0.5 <- table(listings_logit_val$host_is_superhost, listings_logit_val$superhost_pred1 > 0.5)
+accuracy <-  sum(diag(table_0.5))/sum(table_0.5)
+table_0.5
+accuracy
+```
+
+At 0.5 threhold, this model provides 79% accuracy. It indicates that, given the charecteristics of a random host,  the model is able to correctly predict whether the said host is a superhost or not 79% of the time. 
+
+#### Build the ROC curve and calculate AUC
+
+```{r}
+library(ROCR)
+ROCRpred <-  prediction(listings_logit_val$superhost_pred1, listings_logit_val$host_is_superhost)
+ROCCurve <-  performance(ROCRpred, "tpr", "fpr")
+plot(ROCCurve)
+
+```
+
+``` {r}
+AUC <-  as.numeric(performance(ROCRpred, "auc")@y.values)
+AUC
+```
+
+Given the second business problem we are trying to solve is to provide directional suggestions to airbnb hosts how they can make changes to increase likelihood of being a superhost, a AUC at 0.86 is satisfactory. 
+
+#### Calculating the odds ratio of significant predictors, alpha = 0.05
+
+```{r}
+# Create a table for predictors with its pvalue and oddsratio
+oddsratio <- exp(logit1$coef)
+or <- data.frame(variable.names(logit1),coef(summary(logit1))[,4], oddsratio)
+colnames(or) <- c("predictor", "pvalue", "oddsratio")
+# drop the first row with intercept
+or <- or[2:nrow(or),]
+```
+
+```{r}
+# Lable dummy vairables
+# this is important because to make a chance in dummy variable category is different from making a change in numeric categories 
+or$dummy <- ifelse(grepl("amenities", as.character(or$predictor)) |
+                     grepl("property_type", as.character(or$predictor)) |
+                     grepl("room_type", as.character(or$predictor)) |
+                     as.character(or$predictor) == "host_identity_verified" |
+                     as.character(or$predictor) == "instant_bookable" |
+                     as.character(or$predictor) == "is_location_exact", 1, 0)
+```
+
+#### Significant predictors
+```{r}
+# Sort the table by oddsratio in descending order
+or <- or[order(-or$oddsratio),]
+#remove predictors that are not significant
+or_significant <- subset(or, pvalue < 0.05)
+or_significant <- or_significant[order(as.character(or_significant$predictor)),]
+```
+
+#### Calculate Importance of significant predictors
+```{r}
+sd <- apply(listings_logit_val, 2, FUN = sd)
+
+sd_significant <- sd[which(names(sd) %in% as.character(or_significant$predictor))]
+sd_significant <- sd_significant[order(names(sd_significant))]
+
+or_significant$x <- (or_significant$oddsratio)^(2*sd_significant)
+
+# if x<1, importance is 1/x, if x>1, importance is x
+or_significant$x <- ifelse(or_significant$x < 1, 1/or_significant$x, or_significant$x)
+or_significant  <- or_significant[order(-or_significant$x),]
+names(or_significant)[5]<- "importance"
+```
+
+
+#### Insignificant predictors
+```{r}
+# Predictors that are not significant
+or_insignificant <- subset(or, pvalue >= 0.05)
+or_insignificant
+```
+
+\
+## e.   Recommendations: List your recommendations, conclusions, suggestions for future data collections/experiments, and any caveats. 
+
+### 1. For new airbnb host, XGboost model will allow them to price their listing at average price of all listings given the same condition.
+
+In general, pricing is determined by the size of your proporty listed.
+```{r}
+neighbourhood_region <- as.factor(c("West Seattle", "Downtown"))
+property_type <- as.factor(c("House", "Apartment"))
+room_type <- as.factor(c("Private room", "Entire home/apt"))
+accommodates <- c(2, 2)
+bedrooms <- c(1, 1)
+bathrooms <- c(1, 1)
+amenities_ac <- c(0,1)
+amenities_tv <- c(0, 1)
+amenities_kitchen <- c(0,1)
+amenities_petsallowed <- c(1,0)
+amenities_freeparking <- c(1,0)
+instant_bookable <- c(0,1)
+host_identity_verified <- c(1,1)
+cancellation_policy_strictness <- c(1,1)
+number_of_reviews <- c(0,0)
+months_as_host <- c(0,0)
+host_is_superhost <- c(0,0)
+minimum_nights <- c(1,1)
+
+new_host <- data.frame(neighbourhood_region, property_type, room_type, accommodates, bedrooms, bathrooms, amenities_ac, amenities_tv, amenities_kitchen, amenities_petsallowed, amenities_freeparking, instant_bookable, host_identity_verified, cancellation_policy_strictness, number_of_reviews, months_as_host, host_is_superhost, minimum_nights)
+
+new_host$price <- round(predict(xgboost, newdata = data.matrix(new_host)),0)
+write.csv(new_host, "new_host_prediction.csv")
+
+```
+
+### 2. For host who would love to become super host:
+
+#### 2a. Overall rating really matters!
+
+For every unit increase in your overall rating (out of 100), your odds of being a superhost increase by 22%
+
+#### 2b. There are a few changes that are super important and low hanging fruit
+
+i. Keep the place clean - for every unit increase in cleanliness scores (out of 10), your odds of being a superhost increases by 91%.
+
+ii. Gives guests privacy - for hosts who provide guests with private room or entire apt/home, the odds of them being a superhost increases by over 300%.
+
+iii. Keep your listing accurate - for every unit increase in your overall rating (out of 10), your odds of being a superhost increase by 67%
+
+iv. Respond fast - for every unit increase in levels of response speed, your odds of being a superhost increase by 43%.
+
+v. Do not have a super strict cancellation policy - for every unit increase in levels of cancellation policy strictness, your odds of being a superhost decreases by 17%.
+
+#### 2c. As your experience grow, your likelihood of becoming a superhood increases. So be patient!
+
+i.Reviews per month - for every incremental change in average reviews you receive per month, your odds of being a superhost increase by 22%.
+
+#### 2d. Don't worry about these things too much since they are not significant:
+
+minimal stay,
+have an AC,
+the size of your property listed,
+your availability in the next 365 days,
+have free parking,
+and many more,
