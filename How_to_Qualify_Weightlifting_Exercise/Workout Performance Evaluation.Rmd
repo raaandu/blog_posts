@@ -1,0 +1,240 @@
+---
+title: "How to Qualify Weightlifting Exercise Using Fitness Tracker Data"
+author: "Ran Du"
+date: "28/03/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Executive Summary
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. Are they doing exactly like what they were told, or are they making some of the common mistakes? In this project, I aimed to use data collected from Groupware@LES  (http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har) to predict the manner someone performs some of the simple weight lifting exercise. 
+
+Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E). 4 fifferent accelerometers have been placed on the participants themselves and on the dumbbell - 3 on the belt, forearm and arm, and 1 on dumbell. Participants were asked to perform barbell lifts correctly and incorrectly in 5 different ways. 
+
+To solve this problem, I first applied Principal Component Analysis to narrow down the variables from 160 to 25. I then applied two multi-claccification models - Random Forest and K-nearest Neighbours. I selected Random Forest which has a higher accuracy at 97%.
+
+## Data Processing
+
+#### i. Load data
+```{r}
+training <- read.csv("pml-training.csv", na.strings = c("", "NA"))
+testing <- read.csv("pml-testing.csv", na.strings = c("", "NA"))
+```
+
+```{r results='hide'}
+# We hided results in the final output because it's too long
+head(training,10)
+```
+
+```{r}
+dim(training)
+```
+Our obeservations: 
+1) the dataset is quite large. It also has a lot of variables. 
+2) Each sensor captures multiple datapoints. Some variables has a lot of NA values. They might not be useful and we should consider exlcude these variables.
+3) The name of variable ends with the name of the particular sensor that is providing the datapoint. This allows us to group variables together and possibily conducts a PCA to reduce dementions.
+
+#### ii. Remove NA columns
+
+```{r message=FALSE, warning=FALSE, results = 'hide'}
+# We hided results in the final output because it's too long
+library(dplyr)
+col_na_count <- training %>%
+  select(everything()) %>%
+  summarise_all(funs(sum(is.na(.))))
+col_na_count
+```
+Here we have count of NA in each column. As we can see, for columns with NA, NA is the dominated value - there are 19216 NAs out of 19622 rows. Let's remove columns with more than half rows NA.
+
+```{r results = 'hide'}
+# We hided results in the final output because it's too long
+training_filter <- training %>% 
+    select(-which(col_na_count > 0.5 * nrow(training)))
+head(training_filter)
+```
+
+Now we are down to 60 variables.
+
+#### iii. Conduct PCA to reduce dimentions
+
+Among the predictors, we can see they can be grouped in to groups based on their names. Let's group them and check the correlation among variables.
+First let's take a look at Belt.
+
+```{r results = 'hide'}
+# We hided results in the final output because it's too long
+training_belt <- training_filter %>% select(contains("belt"))
+cor(training_belt)
+head(training_belt)
+```
+
+As we can see, a lot of variables are highly correlated, such as -0.99. We can use Principle Componenet Analysis to reduce the dementions. Notice the scales of these variables are very different and there are both positive and negative values, we will need to center and scale our data as well.
+
+```{r message=FALSE, warning=FALSE}
+library(caret)
+
+training_belt_pcamodel <- preProcess(training_belt, method = c("center", "scale", "pca"), thresh = 0.90)
+training_belt_pcamodel
+```
+As we can see, we only need 4 components do perserve 90% of the variance. This will decrease reduce our data dimentions dramatically.
+
+```{r}
+# apply PCA model
+training_belt_pca <- predict(training_belt_pcamodel, newdata = training_belt)
+# rename the columne names
+names(training_belt_pca) <- c("belt_pca1","belt_pca2","belt_pca3","belt_pca4")
+```
+
+Next we will repeat the process for the rest three group of variable - forearm, arm, and dumbell.
+
+```{r}
+# Create model for forearm
+training_forearm <- training_filter %>% select(contains("forearm"))
+training_forearm_pcamodel <- preProcess(training_forearm, method = c("center", "scale", "pca"), thresh = 0.90)
+training_forearm_pcamodel
+# We need 8 variables to perserve 90% variance
+training_forearm_pca <- predict(training_forearm_pcamodel, newdata = training_forearm)
+names(training_forearm_pca) <- c("forearm_pca1","forearm_pca2","forearm_pca3","forearm_pca4", "forearm_pca5","forearm_pca6","forearm_pca7","forearm_pca8")
+
+```
+
+```{r}
+# Create model for arm
+training_arm <- training_filter %>% select(contains("_arm"))
+training_arm_pcamodel <- preProcess(training_arm, method = c("center", "scale", "pca"), thresh = 0.90)
+training_arm_pcamodel
+# We need 7 variables to perserve 90% variance
+training_arm_pca <- predict(training_arm_pcamodel, newdata = training_arm)
+names(training_arm_pca) <- c("arm_pca1","arm_pca2","arm_pca3","arm_pca4", "arm_pca5","arm_pca6","arm_pca7")
+```
+
+```{r}
+ # Create model for dumbbell
+training_dumbbell <- training_filter %>% select(contains("_dumbbell"))
+training_dumbbell_pcamodel <- preProcess(training_dumbbell, method = c("center", "scale", "pca"), thresh = 0.90)
+training_dumbbell_pcamodel
+# We need 6 variables to perserve 90% variance
+training_dumbbell_pca <- predict(training_dumbbell_pcamodel, newdata = training_dumbbell)
+names(training_dumbbell_pca) <- c("dumbbell_pca1","dumbbell_pca2","dumbbell_pca3","dumbbell_pca4", "dumbbell_pca5","dumbbell_pca6")
+```
+
+Now let's combine all the variables after PCA.
+
+```{r}
+training_pca <- data.frame(user_name = training[, 2], classe = training$classe, training_belt_pca, training_arm_pca, training_forearm_pca, training_dumbbell_pca )
+```
+
+Nowe we have 33 variables. Let's do some Exploratory Data Analysis.
+
+## Explortory Data Analysis
+
+```{r}
+table(training_pca$user_name, training_pca$classe)
+```
+Each of the 6 participants performed 5 classes of workout.
+
+```{r message=FALSE, warning = FALSE}
+# plot classes vs users
+library(plotly)
+plot_ly(training_pca, x = ~classe, y = ~belt_pca1, color = ~user_name, type = "box") %>% 
+  layout(title = "belt_pca1 per participant for each class", xaxis = list(title = "class"))
+```
+
+In this plot, we can see that user is differently a very important factor. No matter which classe is, the range of motion seems to be different from users to users. This tells us user should be a predictor included in our model.
+
+```{r message=FALSE, warning = FALSE}
+
+plot_ly(subset(training_pca, user_name = "adelmo")[,c(2,3,7, 22)], x = ~belt_pca1, y = ~arm_pca1, z = ~dumbbell_pca1, color = ~classe) %>% 
+    layout(title = "Adelmo Performing Weightlifting in Five Different Fashions")
+```
+
+In this plot, we only look at Adelmo's movements. We can see that: 
+1) each classes has different range of movements. 
+2) There might be some outliers in the range of movement. For example, one data point has extremely large dumbbell_pca1. However, Because we only plotted 3 vairables, it's hard to see if these are real outliers, so we decided to keep them.
+
+## Select models
+
+First, let's slice the training data into training and validation sample.
+```{r}
+
+# Define train control for k fold cross validation
+# train_control <- trainControl(method="cv", number= 5, savePredictions = TRUE)
+
+set.seed(123)
+index <- createDataPartition(training$classe, p = 0.6, list = FALSE)
+pca_tra <- training_pca[index,]
+pca_val <- training_pca[-index,]
+```
+
+This is a mutiple calssification problem. The models we can use are tree based models and k-nearest neighbours.
+
+#### Model 1 - Random Forest
+``` {r cache = TRUE}
+#Random Forest
+model1 <- train(classe ~., data= pca_tra, method="rf")
+pca_val$pred_rf <- predict(model1, newdata = pca_val, type = "raw")
+confusionMatrix(pca_val$classe, pca_val$pred_rf)
+```
+
+#### Model 2 - K-nearest neighbours
+```{r cache = TRUE}
+#KNN Model
+ctrl <- trainControl(method="repeatedcv",repeats = 3)
+model2 <- train(classe ~., data= pca_tra, method="knn", trControl = ctrl, tuneGrid = expand.grid(k = 1:10))
+pca_val$pred_knn <- predict(model2, newdata = pca_val, type = "raw")
+confusionMatrix(pca_val$classe, pca_val$pred_knn)
+```
+
+## Prediction
+
+Both our models perform very well. Random Forest Model has 97% accuracy. KNN model with 3-fold of cross validation has 98% accuracy. Since there is no major difference, we can use either model. We will use Random Forest model to predict the testing data.
+
+#### Remove NA columns from testing data
+```{r}
+col_na_count_testing <- testing %>%
+  select(everything()) %>%
+  summarise_all(funs(sum(is.na(.))))
+
+testing_filter <- testing %>% 
+    select(-which(col_na_count_testing > 0.5 * nrow(testing)))
+```
+
+#### Create PCA for testing data
+```{r}
+# Create pca variables with "belt"
+testing_belt <- testing_filter %>% select(contains("belt"))
+testing_belt_pca <- predict(training_belt_pcamodel, newdata = testing_belt)
+names(testing_belt_pca) <- c("belt_pca1","belt_pca2","belt_pca3","belt_pca4")
+
+# Create pca variables with "forearm"
+testing_forearm <- testing_filter %>% select(contains("forearm"))
+testing_forearm_pca <- predict(training_forearm_pcamodel, newdata = testing_forearm)
+names(testing_forearm_pca) <- c("forearm_pca1","forearm_pca2","forearm_pca3","forearm_pca4", "forearm_pca5", "forearm_pca6", "forearm_pca7", "forearm_pca8")
+
+# Create pca variables with "_arm"
+testing_arm <- testing_filter %>% select(contains("_arm"))
+testing_arm_pca <- predict(training_arm_pcamodel, newdata = testing_arm)
+names(testing_arm_pca) <- c("arm_pca1","arm_pca2","arm_pca3","arm_pca4", "arm_pca5", "arm_pca6", "arm_pca7")
+
+# Create pca variables with "dumbbell"
+testing_dumbbell <- testing_filter %>% select(contains("dumbbell"))
+testing_dumbbell_pca <- predict(training_dumbbell_pcamodel, newdata = testing_dumbbell)
+names(testing_dumbbell_pca) <- c("dumbbell_pca1","dumbbell_pca2","dumbbell_pca3","dumbbell_pca4", "dumbbell_pca5", "dumbbell_pca6")
+
+# Combine groups of categories
+
+testing_pca <- data.frame(user_name = testing[, 2], testing_belt_pca, testing_arm_pca, testing_forearm_pca, testing_dumbbell_pca )
+```
+
+#### Make prediction using Random Forest
+
+```{r}
+testing_pca$pred <- predict(model1, newdata = testing_pca, type = "raw")
+testing_pca$pred
+```
+
+
+
